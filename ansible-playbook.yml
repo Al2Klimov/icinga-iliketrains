@@ -1,0 +1,322 @@
+---
+- hosts: all
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: Icinga 2 dependencies
+    loop:
+    - haveged
+    - libboost-atomic1.67.0
+    - libboost-chrono1.67.0
+    - libboost-context1.67.0
+    - libboost-coroutine1.67.0
+    - libboost-date-time1.67.0
+    - libboost-filesystem1.67.0
+    - libboost-program-options1.67.0
+    - libboost-regex1.67.0
+    - libboost-thread1.67.0
+    - libyajl2
+    - monitoring-plugins
+    apt:
+      name: '{{ item }}'
+  - name: Icinga 2 packages
+    loop:
+    - common
+    - bin
+    copy:
+      dest: '/icinga2-{{ item }}.deb'
+      mode: '0644'
+      src: 'icinga2-{{ item }}.deb'
+    register: i2debs
+  - name: 'dpkg -i /icinga2-*.deb'
+    when: 'i2debs.results[0].changed or i2debs.results[1].changed'
+    shell: 'dpkg -i /icinga2-*.deb'
+    notify: Restart Icinga 2
+  handlers:
+  - name: Restart Icinga 2
+    service:
+      name: icinga2
+      state: restarted
+- hosts: aklimov-iliketrains1-master1
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: icinga2 node setup
+    shell: >
+      icinga2 node setup
+      --zone master
+      --listen 0.0.0.0,5665
+      --cn {{ inventory_hostname }}
+      --master
+      --disable-confd;
+      rm -f /var/cache/icinga2/icinga2.vars
+    args:
+      creates: /var/lib/icinga2/certs/ca.crt
+    notify: Restart Icinga 2
+  - name: /var/cache/icinga2/icinga2.vars
+    shell: icinga2 daemon -C
+    args:
+      creates: /var/cache/icinga2/icinga2.vars
+  - name: Icinga 2 ticket
+    with_inventory_hostnames:
+    - 'all:!{{ inventory_hostname }}'
+    shell: >
+      icinga2 pki ticket --cn {{ item }}
+      >/var/cache/icinga2/{{ item }}.ticket
+    args:
+      creates: '/var/cache/icinga2/{{ item }}.ticket'
+  - name: Fetch Icinga 2 ticket
+    with_inventory_hostnames:
+    - 'all:!{{ inventory_hostname }}'
+    fetch:
+      dest: .tempfiles
+      src: '/var/cache/icinga2/{{ item }}.ticket'
+  - name: Fetch Icinga 2 master cert
+    fetch:
+      dest: .tempfiles
+      src: '/var/lib/icinga2/certs/{{ inventory_hostname }}.crt'
+  handlers:
+  - name: Restart Icinga 2
+    service:
+      name: icinga2
+      state: restarted
+- hosts: 'all:!aklimov-iliketrains1-master1'
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: /var/cache/icinga2/trusted.crt
+    copy:
+      dest: /var/cache/icinga2/trusted.crt
+      owner: nagios
+      group: nagios
+      mode: '0644'
+      src: .tempfiles/aklimov-iliketrains1-master1/var/lib/icinga2/certs/aklimov-iliketrains1-master1.crt
+  - name: /var/cache/icinga2/my.ticket
+    copy:
+      dest: /var/cache/icinga2/my.ticket
+      owner: nagios
+      group: nagios
+      mode: '0600'
+      src: '.tempfiles/aklimov-iliketrains1-master1/var/cache/icinga2/{{ inventory_hostname }}.ticket'
+  - name: icinga2 node setup
+    shell: >
+      icinga2 node setup
+      --zone {{ inventory_hostname }}
+      --endpoint aklimov-iliketrains1-master1,{{ hostvars['aklimov-iliketrains1-master1'].ansible_all_ipv4_addresses[0] }},5665
+      --parent_host {{ hostvars['aklimov-iliketrains1-master1'].ansible_all_ipv4_addresses[0] }},5665
+      --parent_zone master
+      --listen 0.0.0.0,5665
+      --ticket `cat /var/cache/icinga2/my.ticket`
+      --trustedcert /var/cache/icinga2/trusted.crt
+      --cn {{ inventory_hostname }}
+      --accept-config
+      --accept-commands
+      --disable-confd
+    args:
+      creates: /var/lib/icinga2/certs/ca.crt
+    notify: Restart Icinga 2
+  handlers:
+  - name: Restart Icinga 2
+    service:
+      name: icinga2
+      state: restarted
+- hosts: all
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: /etc/icinga2/zones.conf.d
+    file:
+      path: /etc/icinga2/zones.conf.d
+      owner: root
+      group: root
+      mode: '0755'
+      state: directory
+  - name: Icinga 2 zones config
+    loop:
+    - aklimov-iliketrains1-master1
+    - aklimov-iliketrains1-master2
+    copy:
+      dest: '/etc/icinga2/zones.conf.d/{{ item }}.conf'
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        object Endpoint "{{ item }}" {
+          host = "{{ hostvars[item].ansible_all_ipv4_addresses[0] }}"
+        }
+    notify: Restart Icinga 2
+  - name: /etc/icinga2/zones.conf.d/master.conf
+    copy:
+      dest: /etc/icinga2/zones.conf.d/master.conf
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        object Zone "master" {
+          endpoints = [ "aklimov-iliketrains1-master1", "aklimov-iliketrains1-master2" ]
+        }
+    notify: Restart Icinga 2
+  - name: /etc/icinga2/zones.conf.d/global.conf
+    copy:
+      dest: /etc/icinga2/zones.conf.d/global.conf
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        object Zone "global" {
+          global = true
+        }
+    notify: Restart Icinga 2
+  handlers:
+  - name: Restart Icinga 2
+    service:
+      name: icinga2
+      state: restarted
+- hosts: 'aklimov-iliketrains1-master1:aklimov-iliketrains1-master2'
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: Icinga 2 zones config
+    with_inventory_hostnames: 'all:!aklimov-iliketrains1-master1:!aklimov-iliketrains1-master2'
+    copy:
+      dest: '/etc/icinga2/zones.conf.d/{{ item }}.conf'
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        object Endpoint "{{ item }}" {
+          host = "{{ hostvars[item].ansible_all_ipv4_addresses[0] }}"
+        }
+        object Zone "{{ item }}" {
+          parent = "master"
+          endpoints = [ "{{ item }}" ]
+        }
+    notify: Restart Icinga 2
+  handlers:
+  - name: Restart Icinga 2
+    service:
+      name: icinga2
+      state: restarted
+- hosts: 'all:!aklimov-iliketrains1-master1:!aklimov-iliketrains1-master2'
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: Icinga 2 zones config
+    copy:
+      dest: '/etc/icinga2/zones.conf.d/{{ inventory_hostname }}.conf'
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        object Endpoint "{{ inventory_hostname }}" {
+        }
+        object Zone "{{ inventory_hostname }}" {
+          parent = "master"
+          endpoints = [ "{{ inventory_hostname }}" ]
+        }
+    notify: Restart Icinga 2
+  handlers:
+  - name: Restart Icinga 2
+    service:
+      name: icinga2
+      state: restarted
+- hosts: all
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: /etc/icinga2/zones.conf
+    copy:
+      dest: /etc/icinga2/zones.conf
+      content: 'include "zones.conf.d/*.conf"'
+    notify: Restart Icinga 2
+  handlers:
+  - name: Restart Icinga 2
+    service:
+      name: icinga2
+      state: restarted
+- hosts: aklimov-iliketrains1-master1
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: Icinga 2 config dir
+    loop:
+    - global
+    - master
+    file:
+      path: '/etc/icinga2/zones.d/{{ item }}'
+      owner: root
+      group: root
+      mode: '0755'
+      state: directory
+  - name: Icinga 2 config dir
+    with_inventory_hostnames: 'all:!aklimov-iliketrains1-master1:!aklimov-iliketrains1-master2'
+    file:
+      path: '/etc/icinga2/zones.d/{{ item }}'
+      owner: root
+      group: root
+      mode: '0755'
+      state: directory
+  - name: /etc/icinga2/zones.d/global/global.conf
+    copy:
+      dest: /etc/icinga2/zones.d/global/global.conf
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        object User "navalny" {
+        }
+        object NotificationCommand "stabilnost" {
+          command = [ "/bin/true" ]
+        }
+        for (i in range(400)) {
+          apply Service i {
+            check_command = "dummy"
+            command_endpoint = host.name
+            check_interval = 5m
+            max_check_attempts = 1
+            var that = this
+            vars.dummy_state = function() use(that) {
+              return if (that.last_check_result && that.last_check_result.state) { 0 } else { 2 }
+            }
+            assign where true
+          }
+        }
+        apply Notification "stabilnost" to Service {
+          command = "stabilnost"
+          users = [ "navalny" ]
+          assign where true
+        }
+    notify: Restart Icinga 2
+  - name: Icinga 2 host config
+    loop:
+    - aklimov-iliketrains1-master1
+    - aklimov-iliketrains1-master2
+    copy:
+      dest: '/etc/icinga2/zones.d/master/{{ item }}.conf'
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        object Host "{{ item }}" {
+          check_command = "passive"
+          enable_active_checks = false
+        }
+    notify: Restart Icinga 2
+  - name: Icinga 2 host config
+    with_inventory_hostnames: 'all:!aklimov-iliketrains1-master1:!aklimov-iliketrains1-master2'
+    copy:
+      dest: '/etc/icinga2/zones.d/{{ item }}/{{ item }}.conf'
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        object Host "{{ item }}" {
+          check_command = "passive"
+          enable_active_checks = false
+        }
+    notify: Restart Icinga 2
+  handlers:
+  - name: Restart Icinga 2
+    service:
+      name: icinga2
+      state: restarted
