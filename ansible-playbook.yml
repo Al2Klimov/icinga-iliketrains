@@ -32,6 +32,15 @@
     when: 'i2debs.results[0].changed or i2debs.results[1].changed'
     shell: 'dpkg -i /icinga2-*.deb'
     notify: Restart Icinga 2
+  - name: /etc/default/icinga2
+    copy:
+      dest: /etc/default/icinga2
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        ICINGA2_RLIMIT_FILES=1000000
+    notify: Restart Icinga 2
   handlers:
   - name: Restart Icinga 2
     service:
