@@ -71,10 +71,10 @@
     fetch:
       dest: .tempfiles
       src: '/var/cache/icinga2/{{ item }}.ticket'
-  - name: Fetch Icinga 2 master cert
+  - name: Fetch Icinga 2 CA cert
     fetch:
       dest: .tempfiles
-      src: '/var/lib/icinga2/certs/{{ inventory_hostname }}.crt'
+      src: /var/lib/icinga2/certs/ca.crt
   handlers:
   - name: Restart Icinga 2
     service:
@@ -84,13 +84,6 @@
   become: yes
   become_method: sudo
   tasks:
-  - name: /var/cache/icinga2/trusted.crt
-    copy:
-      dest: /var/cache/icinga2/trusted.crt
-      owner: nagios
-      group: nagios
-      mode: '0644'
-      src: .tempfiles/aklimov-iliketrains1-master1/var/lib/icinga2/certs/aklimov-iliketrains1-master1.crt
   - name: /var/cache/icinga2/my.ticket
     copy:
       dest: /var/cache/icinga2/my.ticket
@@ -103,23 +96,35 @@
       icinga2 node setup
       --zone {{ inventory_hostname }}
       --endpoint aklimov-iliketrains1-master1,{{ hostvars['aklimov-iliketrains1-master1'].ansible_all_ipv4_addresses[0] }},5665
-      --parent_host {{ hostvars['aklimov-iliketrains1-master1'].ansible_all_ipv4_addresses[0] }},5665
       --parent_zone master
       --listen 0.0.0.0,5665
       --ticket `cat /var/cache/icinga2/my.ticket`
-      --trustedcert /var/cache/icinga2/trusted.crt
       --cn {{ inventory_hostname }}
       --accept-config
       --accept-commands
       --disable-confd
     args:
-      creates: /var/lib/icinga2/certs/ca.crt
+      creates: /var/lib/icinga2/certs
     notify: Restart Icinga 2
+  - name: /var/lib/icinga2/certs/ca.crt
+    copy:
+      dest: /var/lib/icinga2/certs/ca.crt
+      owner: nagios
+      group: nagios
+      mode: '0644'
+      src: .tempfiles/aklimov-iliketrains1-master1/var/lib/icinga2/certs/ca.crt
   handlers:
   - name: Restart Icinga 2
     service:
       name: icinga2
       state: restarted
+- hosts: 'all:!aklimov-iliketrains1-master1'
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: Wait for signing
+    shell: |
+      while ! openssl x509 -in /var/lib/icinga2/certs/{{ inventory_hostname }}.crt -noout -text |grep -qFwe 'Issuer: CN = Icinga CA'; do sleep 1; done
 - hosts: all
   become: yes
   become_method: sudo
