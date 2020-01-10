@@ -2,6 +2,113 @@
 - hosts: all
   become: yes
   become_method: sudo
+  tasks: []
+- hosts: aklimov-iliketrains1-helper
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: squid-deb-proxy
+    apt:
+      name: squid-deb-proxy
+  - name: nginx
+    apt:
+      name: nginx
+  - name: Stop squid
+    service:
+      name: squid
+      state: stopped
+      enabled: no
+  - name: /etc/squid-deb-proxy/allowed-networks-src.acl.d/99-*
+    with_inventory_hostnames: all
+    copy:
+      dest: '/etc/squid-deb-proxy/allowed-networks-src.acl.d/99-{{ item }}'
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        {{ hostvars[item].ansible_all_ipv4_addresses[0] }}/32
+    notify: Restart squid-deb-proxy
+  - name: /etc/squid-deb-proxy/mirror-dstdomain.acl.d/99-*
+    loop:
+    - cdn-aws.deb.debian.org
+    - mirror.hetzner.de
+    copy:
+      dest: '/etc/squid-deb-proxy/mirror-dstdomain.acl.d/99-{{ item }}'
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        {{ item }}
+    notify: Restart squid-deb-proxy
+  - name: /etc/nginx/default.allow.d
+    file:
+      path: /etc/nginx/default.allow.d
+      owner: root
+      group: root
+      mode: '0755'
+      state: directory
+  - name: /etc/nginx/sites-available/default
+    copy:
+      dest: /etc/nginx/sites-available/default
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        server {
+          listen 80 default_server;
+          server_name _;
+          root /var/www/html;
+
+          include /etc/nginx/default.allow.d/*.conf;
+          deny all;
+        }
+    notify: Restart nginx
+  - name: /etc/nginx/default.allow.d/*.conf
+    with_inventory_hostnames: all
+    copy:
+      dest: '/etc/nginx/default.allow.d/{{ item }}.conf'
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        allow {{ hostvars[item].ansible_all_ipv4_addresses[0] }};
+    notify: Restart nginx
+  handlers:
+  - name: Restart squid-deb-proxy
+    service:
+      name: squid-deb-proxy
+      state: restarted
+  - name: Restart nginx
+    service:
+      name: nginx
+      state: restarted
+- hosts: aklimov-iliketrains1-helper
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: Icinga 2 packages
+    loop:
+    - common
+    - bin
+    copy:
+      dest: '/var/www/html/icinga2-{{ item }}.deb'
+      mode: '0644'
+      src: 'icinga2-{{ item }}.deb'
+- hosts: all
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: /etc/apt/apt.conf.d/01proxy
+    copy:
+      dest: /etc/apt/apt.conf.d/01proxy
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        Acquire::http { Proxy "http://{{ hostvars['aklimov-iliketrains1-helper'].ansible_all_ipv4_addresses[0] }}:8000"; };
+- hosts: icingas
+  become: yes
+  become_method: sudo
   tasks:
   - name: Icinga 2 dependencies
     loop:
@@ -23,10 +130,11 @@
     loop:
     - common
     - bin
-    copy:
+    get_url:
       dest: '/icinga2-{{ item }}.deb'
       mode: '0644'
-      src: 'icinga2-{{ item }}.deb'
+      url: >-
+        http://{{ hostvars['aklimov-iliketrains1-helper'].ansible_all_ipv4_addresses[0] }}/icinga2-{{ item }}.deb
     register: i2debs
   - name: 'dpkg -i /icinga2-*.deb'
     when: 'i2debs.results[0].changed or i2debs.results[1].changed'
@@ -96,7 +204,7 @@
       creates: /var/cache/icinga2/icinga2.vars
   - name: Icinga 2 ticket
     with_inventory_hostnames:
-    - 'all:!{{ inventory_hostname }}'
+    - 'icingas:!{{ inventory_hostname }}'
     shell: >
       icinga2 pki ticket --cn {{ item }}
       >/var/cache/icinga2/{{ item }}.ticket
@@ -104,7 +212,7 @@
       creates: '/var/cache/icinga2/{{ item }}.ticket'
   - name: Fetch Icinga 2 ticket
     with_inventory_hostnames:
-    - 'all:!{{ inventory_hostname }}'
+    - 'icingas:!{{ inventory_hostname }}'
     fetch:
       dest: .tempfiles
       src: '/var/cache/icinga2/{{ item }}.ticket'
@@ -117,7 +225,7 @@
     service:
       name: icinga2
       state: restarted
-- hosts: 'all:!aklimov-iliketrains1-master1'
+- hosts: 'icingas:!aklimov-iliketrains1-master1'
   become: yes
   become_method: sudo
   tasks:
@@ -155,14 +263,14 @@
     service:
       name: icinga2
       state: restarted
-- hosts: 'all:!aklimov-iliketrains1-master1'
+- hosts: 'icingas:!aklimov-iliketrains1-master1'
   become: yes
   become_method: sudo
   tasks:
   - name: Wait for signing
     shell: |
       while ! openssl x509 -in /var/lib/icinga2/certs/{{ inventory_hostname }}.crt -noout -text |grep -qFwe 'Issuer: CN = Icinga CA'; do sleep 1; done
-- hosts: all
+- hosts: icingas
   become: yes
   become_method: sudo
   tasks:
@@ -219,7 +327,7 @@
   become_method: sudo
   tasks:
   - name: Icinga 2 zones config
-    with_inventory_hostnames: 'all:!aklimov-iliketrains1-master1:!aklimov-iliketrains1-master2'
+    with_inventory_hostnames: 'icingas:!aklimov-iliketrains1-master1:!aklimov-iliketrains1-master2'
     copy:
       dest: '/etc/icinga2/zones.conf.d/{{ item }}.conf'
       owner: root
@@ -239,7 +347,7 @@
     service:
       name: icinga2
       state: restarted
-- hosts: 'all:!aklimov-iliketrains1-master1:!aklimov-iliketrains1-master2'
+- hosts: 'icingas:!aklimov-iliketrains1-master1:!aklimov-iliketrains1-master2'
   become: yes
   become_method: sudo
   tasks:
@@ -262,7 +370,7 @@
     service:
       name: icinga2
       state: restarted
-- hosts: all
+- hosts: icingas
   become: yes
   become_method: sudo
   tasks:
@@ -291,7 +399,7 @@
       mode: '0755'
       state: directory
   - name: Icinga 2 config dir
-    with_inventory_hostnames: 'all:!aklimov-iliketrains1-master1:!aklimov-iliketrains1-master2'
+    with_inventory_hostnames: 'icingas:!aklimov-iliketrains1-master1:!aklimov-iliketrains1-master2'
     file:
       path: '/etc/icinga2/zones.d/{{ item }}'
       owner: root
@@ -345,7 +453,7 @@
         }
     notify: Restart Icinga 2
   - name: Icinga 2 host config
-    with_inventory_hostnames: 'all:!aklimov-iliketrains1-master1:!aklimov-iliketrains1-master2'
+    with_inventory_hostnames: 'icingas:!aklimov-iliketrains1-master1:!aklimov-iliketrains1-master2'
     copy:
       dest: '/etc/icinga2/zones.d/{{ item }}/{{ item }}.conf'
       owner: root
