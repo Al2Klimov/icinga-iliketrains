@@ -41,6 +41,34 @@
       content: |
         ICINGA2_RLIMIT_FILES=1000000
     notify: Restart Icinga 2
+  - name: /etc/systemd/system/icinga2.service.d/override.conf
+    copy:
+      dest: /etc/systemd/system/icinga2.service.d/override.conf
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        [Service]
+        LimitCORE=infinity
+    notify: Restart Icinga 2
+  - name: /var/lib/cores
+    file:
+      path: /var/lib/cores
+      owner: root
+      group: root
+      mode: '01777'
+      state: directory
+  - name: kernel.core_pattern
+    sysctl:
+      name: kernel.core_pattern
+      value: /var/lib/cores/core.%e.%p
+  - name: fs.suid_dumpable
+    sysctl:
+      name: fs.suid_dumpable
+      value: 2
+  - name: Reload systemd
+    systemd:
+      daemon_reload: yes
   handlers:
   - name: Restart Icinga 2
     service:
