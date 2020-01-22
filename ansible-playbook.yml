@@ -470,3 +470,45 @@
     service:
       name: icinga2
       state: restarted
+- hosts: 'icingas:!aklimov-iliketrains2-master1:!aklimov-iliketrains2-master2'
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: /vola.pl
+    copy:
+      dest: /vola.pl
+      owner: root
+      group: root
+      mode: '0755'
+      content: |
+        #!/usr/bin/perl
+        while (1) {
+          sleep((rand() * 9 + 1) * 60);
+          print "OFF\n";
+          `iptables -I INPUT -p tcp -m tcp --dport 5665 -j DROP`;
+          `iptables -I OUTPUT -p tcp -m tcp --dport 5665 -j DROP`;
+          sleep((rand() * 4 + 1) * 60);
+          print "ON\n";
+          `iptables -D INPUT -p tcp -m tcp --dport 5665 -j DROP`;
+          `iptables -D OUTPUT -p tcp -m tcp --dport 5665 -j DROP`
+        }
+  - name: /etc/systemd/system/vola.service
+    copy:
+      dest: /etc/systemd/system/vola.service
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        [Unit]
+        [Service]
+        ExecStart=/vola.pl
+        [Install]
+        WantedBy=multi-user.target
+  - name: Reload systemd
+    systemd:
+      daemon_reload: yes
+  - name: Start vola
+    service:
+      name: vola
+      state: started
+      enabled: yes
