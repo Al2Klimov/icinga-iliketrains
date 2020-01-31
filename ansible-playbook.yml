@@ -90,6 +90,7 @@
     loop:
     - common
     - bin
+    - dbg
     copy:
       dest: '/var/www/html/icinga2-{{ item }}.deb'
       mode: '0644'
@@ -112,6 +113,7 @@
   tasks:
   - name: Icinga 2 dependencies
     loop:
+    - gdb
     - haveged
     - libboost-atomic1.67.0
     - libboost-chrono1.67.0
@@ -124,12 +126,14 @@
     - libboost-thread1.67.0
     - libyajl2
     - monitoring-plugins
+    - screen
     apt:
       name: '{{ item }}'
   - name: Icinga 2 packages
     loop:
     - common
     - bin
+    - dbg
     get_url:
       dest: '/icinga2-{{ item }}.deb'
       mode: '0644'
