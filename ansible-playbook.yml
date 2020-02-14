@@ -474,45 +474,57 @@
     service:
       name: icinga2
       state: restarted
+- hosts: 127.0.0.1
+  connection: local
+  tasks:
+  - name: Build net-vola
+    shell: GOOS=linux GOARCH=amd64 go build -o net-vola .
+    args:
+      chdir: tools/net-vola
+      creates: tools/net-vola/net-vola
+- hosts: aklimov-iliketrains1-helper
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: /var/www/html/net-vola
+    copy:
+      dest: /var/www/html/net-vola
+      mode: '0644'
+      src: tools/net-vola/net-vola
 - hosts: 'icingas:!aklimov-iliketrains2-master1:!aklimov-iliketrains2-master2'
   become: yes
   become_method: sudo
   tasks:
-  - name: /vola.pl
-    copy:
-      dest: /vola.pl
-      owner: root
-      group: root
+  - name: /usr/local/bin/net-vola
+    get_url:
+      dest: /usr/local/bin/net-vola
       mode: '0755'
-      content: |
-        #!/usr/bin/perl
-        while (1) {
-          sleep((rand() * 9 + 1) * 60);
-          print "OFF\n";
-          `iptables -I INPUT -p tcp -m tcp --dport 5665 -j DROP`;
-          `iptables -I OUTPUT -p tcp -m tcp --dport 5665 -j DROP`;
-          sleep((rand() * 4 + 1) * 60);
-          print "ON\n";
-          `iptables -D INPUT -p tcp -m tcp --dport 5665 -j DROP`;
-          `iptables -D OUTPUT -p tcp -m tcp --dport 5665 -j DROP`
-        }
-  - name: /etc/systemd/system/vola.service
+      url: >-
+        http://{{ hostvars['aklimov-iliketrains1-helper'].ansible_all_ipv4_addresses[0] }}/net-vola
+    register: netvola
+  - name: /etc/systemd/system/net-vola.service
     copy:
-      dest: /etc/systemd/system/vola.service
+      dest: /etc/systemd/system/net-vola.service
       owner: root
       group: root
       mode: '0644'
       content: |
         [Unit]
         [Service]
-        ExecStart=/vola.pl
+        ExecStart=/usr/local/bin/net-vola
         [Install]
         WantedBy=multi-user.target
+    register: netvola_svc
   - name: Reload systemd
     systemd:
       daemon_reload: yes
-  - name: Start vola
+  - name: Stop net-vola
+    when: netvola.changed or netvola_svc.changed
     service:
-      name: vola
+      name: net-vola
+      state: stopped
+  - name: Start net-vola
+    service:
+      name: net-vola
       state: started
       enabled: yes
