@@ -497,7 +497,7 @@
       dest: /var/www/html/net-vola
       mode: '0644'
       src: tools/net-vola/net-vola
-- hosts: 'icingas:!aklimov-iliketrains2-master1:!aklimov-iliketrains2-master2'
+- hosts: icingas
   become: yes
   become_method: sudo
   tasks:
